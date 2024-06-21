@@ -1,0 +1,4 @@
+colorama==0.4.6
+colorlog==6.8.2
+pillow==10.3.0
+pyserial==3.5
