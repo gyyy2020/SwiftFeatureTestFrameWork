@@ -5,6 +5,7 @@ from queue import Queue
 from threading import Thread
 
 import serial
+from serial.tools import list_ports
 
 from lib.log_tools import log
 
@@ -17,7 +18,21 @@ class Serial:
         self.running = True
         self.buffer_queue = Queue()
 
-    def use_uart(func):
+    @staticmethod
+    def get_uart_device(port_desc):
+        """
+        get port device name eg.COM1 from port description
+        Args:
+            port_desc:
+
+        Returns:
+
+        """
+        for port_into in list_ports.comports():
+            if port_desc in port_into.description:
+                return port_into.device
+
+    def use_uart_wrapper(func):
 
         @wraps(func)
         def wrapper(self, *args, **kwargs):
@@ -38,10 +53,11 @@ class Serial:
         """
         pass
 
-    @use_uart
-    def open_serial(self, port, baudrate="38400"):
-        self.ser.port = port
+    @use_uart_wrapper
+    def open_serial(self, port, baudrate="38400", timeout=2):
+        self.ser.port = self.get_uart_device(port) if isinstance(port, str) else port
         self.ser.baudrate = int(baudrate)
+        self.ser.timeout = timeout
         self.ser.open()
         if self.ser.is_open:
             log.logger.info(f"serial {port} open success")
@@ -50,11 +66,11 @@ class Serial:
             log.logger.error(f"serial {port} open fail")
             return False
 
-    @use_uart
+    @use_uart_wrapper
     def close_serial(self):
         if self.ser.is_open:
             self.ser.flushOutput()
-            if self.running:
+            if self.uart_thread:
                 try:
                     self.running = False
                     self.uart_thread.join()
@@ -62,7 +78,7 @@ class Serial:
                     log.logger.error(traceback.format_exc())
             self.ser.close()
 
-    @use_uart
+    @use_uart_wrapper
     def write(self, cmd):
         """
         write data to serial
@@ -74,11 +90,11 @@ class Serial:
         """
         self.ser.write(bytes(cmd, encoding="utf8"))
 
-    @use_uart
+    @use_uart_wrapper
     def read_all_data(self):
         return self.ser.read_all()
 
-    @use_uart
+    @use_uart_wrapper
     def read_by_size(self, size=1024):
         """
         read data by size
@@ -90,7 +106,7 @@ class Serial:
         """
         return self.ser.read(size)
 
-    @use_uart
+    @use_uart_wrapper
     def read_by_time(self, duration=3):
         """
         read data by time
@@ -103,6 +119,7 @@ class Serial:
         if duration <= 0:
             return self.read_by_size(1024)
         buffer = b""
+        duration = max(1, duration)
         t0 = time.time()
         while time.time() - t0 < duration:
             buffer += self.ser.read(4)
@@ -119,7 +136,7 @@ class Serial:
 
         """
         t0 = time.time()
-        with open(file_path, "wb", encoding="utf-8", errors="replace") as f:
+        with open(file_path, "ab+", encoding="utf-8", errors="replace") as f:
             while time.time() - t0 < timeout:
                 f.write(self.ser.read(1024))
 
@@ -132,7 +149,7 @@ class Serial:
         Returns:
 
         """
-        with open(file_path, "wb", encoding="utf-8", errors="replace") as f:
+        with open(file_path, "ab+", encoding="utf-8", errors="replace") as f:
             while self.running:
                 f.write(self.ser.read(1024))
 
@@ -143,8 +160,9 @@ class Serial:
 
         """
         buffer = self.buffer_queue
+        read = self.ser.read
         while self.running:
-            buffer.put(self.ser.read(1024))
+            buffer.put(read(1024))
 
     def write_data_from_buffer(self, filename="data.txt"):
         """
@@ -155,7 +173,7 @@ class Serial:
         Returns:
 
         """
-        with open(filename, "wb", encoding="utf-8", errors="replace") as f:
+        with open(filename, "ab+", encoding="utf-8", errors="replace") as f:
             while self.running or not self.buffer_queue.empty():
                 f.write(self.buffer_queue.get())
 
@@ -171,18 +189,22 @@ class Serial:
         self.receive_data_thread()
         self.write_data_thread(filename)
 
-    @use_uart
     def save_uart_data(self, func, args=(), filename="data.txt", save_opt=0):
-        save_func = (self.save_data_until_false, self.save_data_buffered)[save_opt]
-        self.running = True
-        t = Thread(target=save_func, args=(filename,))
-        t.start()
-        r = func(*args)
-        self.running = False
-        t.join()
+        if self.use_uart:
+            save_func = (self.save_data_until_false, self.save_data_buffered)[save_opt]
+            self.running = True
+            t = Thread(target=save_func, args=(filename,))
+            t.start()
+        try:
+            r = func(*args)
+        except:
+            r = False
+        if self.use_uart:
+            self.running = False
+            t.join()
         return r
 
-    @use_uart
+    @use_uart_wrapper
     def start_uart_thread(self, filename, func_opt=0):
         func = (self.save_data_until_false, self.save_data_buffered)[func_opt]
         self.running = True
@@ -190,7 +212,7 @@ class Serial:
         self.uart_thread.start()
         log.logger.info("uart thread start")
 
-    @use_uart
+    @use_uart_wrapper
     def stop_uart_thread(self):
         self.running = False
         try:
